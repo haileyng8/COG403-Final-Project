@@ -1,0 +1,483 @@
+import numpy as np
+import pandas as pd
+from scipy.io import loadmat
+import itertools
+from sklearn.model_selection import train_test_split
+
+# Load dataset containing objects and associated features
+data = pd.read_csv('categorization.tsv', sep='\t', header=None)
+
+# Create DataFrame to store associated dimensions for each object
+object_dims = pd.DataFrame(columns=['Object', 'Conceptual', 'Perceptual'])
+
+for idx, row in data.iterrows():
+  object_name = row[0]
+  object_features = row[1:]
+
+  conceptual_dims = []
+  perceptual_dims = []
+  for feature in object_features:
+        for dimension, features_list in dimension_features_dict.items():
+            if feature in features_list:
+                if dimension in conceptual_dimensions and dimension not in conceptual_dims:
+                    conceptual_dims.append(dimension)
+                elif dimension in perceptual_dimensions and dimension not in perceptual_dims:
+                    perceptual_dims.append(dimension)
+
+  new_row = pd.DataFrame({
+    'Object': [object_name],
+    'Conceptual': [conceptual_dims],
+    'Perceptual': [perceptual_dims]
+  })
+
+  object_dims = pd.concat([object_dims, new_row], ignore_index=True)
+
+def get_indices(full_list, sublist):
+  """
+  Return the indices given a list of dimensions
+
+  Arguments:
+    full_list -- the larger list of dimensions
+    sublist -- the sublist of dimensions
+
+  Returns:
+    indices -- an array of indices
+  """
+  indices = []
+  for dim in sublist:
+    if dim in full_list:
+      index = full_list.index(dim)
+      indices.append(index)
+  return indices
+
+# Create indices for splitting matrix into perceptual and conceptual matrices
+perceptual_i = get_indices(all_dimensions, perceptual_dimensions)
+conceptual_i = get_indices(all_dimensions, conceptual_dimensions)
+
+def generate_similarity_matrix():
+  matlab_sim_matrix = loadmat('spose_similarity.mat')
+  similarity_matrix = matlab_sim_matrix['spose_sim']
+  return similarity_matrix
+
+similarity_matrix = generate_similarity_matrix()
+
+# Load RDM48_triplet.mat to a matrix to m with dimension
+# TODO
+matlab_sim_matrix = loadmat('RDM48_triplet.mat')
+m = matlab_sim_matrix['RDM48_triplet']
+
+# Generate random triplet indeices
+triplets_indices = generate_triplets_indices(num_objects)
+one_hot_triplets = convert_to_one_hot(triplets_indices, num_objects)
+
+# Split to test and train
+train_triplets, test_triplets = train_test_split(one_hot_triplets, test_size=0.1, random_state=42)
+
+# Split m into two matrices, one with only perceptual columns and one with only conceptual columns
+perceptual_m = m[:, perceptual_i]
+conceptual_m = m[:, conceptual_i]
+
+# Generate y_true for both
+perceptual_y_train = convert_to_truth_values(triplets_indices, perceptual_m)
+conceptual_y_train = convert_to_truth_values(triplets_indices, perceptual_m)
+
+
+print(np.shape(train_triplets))
+
+# Data preparation
+
+# Create dictionary of features attributed to each object
+def get_categories(file):
+  object_features = {}
+  with open(file, 'r') as file:
+    lines = file.readlines()
+    for line in lines:
+      ele = line.strip().split('\t')
+      obj = ele[0]
+      features = ele[1:]
+      object_features[obj] = features
+  return object_features
+
+
+def get_dim_char(dim_file, char_file):
+  char_data = loadmat(char_file)
+  characteristics = char_data['dimlabel_answers'].T
+  dim_data = loadmat(dim_file)
+  dimensions = [str(dim) for dim in np.squeeze(dim_data['labels'])]
+  return dimensions, characteristics
+
+def generate_array(dimensions, characteristics, objects_features):
+    char_to_objects = {}
+    for obj, features in objects_features.items():
+        for feature in features:
+            if feature not in char_to_objects:
+                char_to_objects[feature] = []
+            char_to_objects[feature].append(obj)
+
+    array = []
+    for chars in characteristics:
+        dim_objects = []
+        for char in chars:
+          for c in char:
+            if c in char_to_objects:
+                dim_objects.extend(char_to_objects[c])
+        array.append(dim_objects)
+
+    return array
+
+categories = get_categories('categorization.tsv')
+dimensions, characteristics = get_dim_char('labels.mat', 'dimlabel_answers.mat')
+mat = generate_array(dimensions, characteristics, categories)
+
+def calculate_truth_values(i, j, k):
+    """
+    Calculate the truth values of a given triplet row vectors.
+
+    Note:
+    For a triplet (i,j,k), truth values should be in the order
+    of ((i,j), (j,k), (k,i)). For example, if the pair (i,j) was
+    chosen, then the corresponding truth value vector should be
+    [1,0,0].
+
+    Arguments:
+    i -- object vector i
+    j -- object vector j
+    k -- object vector k
+
+    Returns:
+    truth_values -- an array of truth values
+    """
+     # Compute dot products between pairs
+    dot_ij = np.dot(i, j)
+    dot_jk = np.dot(j, k)
+    dot_ki = np.dot(k, i)
+
+    # Determine the closest pair
+    if dot_ij > dot_jk and dot_ij > dot_ki:
+        return [1, 0, 0]  # ij is the closest pair
+    elif dot_jk > dot_ij and dot_jk > dot_ki:
+        return [0, 1, 0]  # jk is the closest pair
+    else:
+        return [0, 0, 1]  # ki is the closest pair
+
+
+def generate_triplets_indices(n):
+  """
+  Create an array of all the possible triplet vectors indices given a matrix of objects.
+
+  Arguments:
+  M -- a matrix with objects as row vectors (NumPy array)
+
+  Returns:
+  triplets_indices -- an array with all possible triplets as vectors
+  """
+ # Generate all possible combinations of numbers from 0 to n-1
+  combinations = itertools.combinations(range(n), 3)  # Change 3 to the desired combination length
+
+  # Convert the combinations to a NumPy array of arrays
+  triplets_indices = np.array([np.array(comb) for comb in combinations])
+
+  return triplets_indices
+
+def calculate_softmax(i,j,k):
+  """
+  Calculate the softmax of the function
+
+  Arguments:
+  i -- vector i
+  j -- vector j
+  k -- vector k
+
+  Returns:
+  softmax -- choice probability of vectors i and j
+  """
+  softmax = np.exp(i, j) / (np.exp(i,j) + np.exp(i,k) + np.exp(j,k))
+  return softmax
+
+def calculate_sparsity_constraint(weights, lambda_value):
+    """
+    Calculate the sparsity constraint based on the L1 norm of the weights.
+
+    Arguments:
+    weights -- Model weights (numpy array)
+    lambda_value -- Regularization parameter (lambda)
+
+    Returns:
+    sparsity_constraint -- Sparsity constraint value
+    """
+    # Calculate L1 norm of the weights
+    l1_norm = np.sum(np.abs(weights))
+
+    # Calculate sparsity constraint
+    sparsity_constraint = lambda_value * l1_norm
+
+    return sparsity_constraint
+
+def calculate_cross_entropy(training_set, weights, objects, sparsity_constraint):
+  """
+  Calculate the cross entropy of each triplet
+
+  Arguments:
+  training_set -- an array of all the triplet vector indices to train
+  weights -- a matrix of all the weights
+  objects -- a matrix of measured object vectors
+  sparsity_constraint -- a scalar sparsity constraint on dimensions
+
+  Returns:
+  loss_values -- an array with all the cross entropy for each triplet
+  """
+  n = np.shape(training_set)
+  loss_values = np.zeros(n)
+
+  for i in range(n):
+    cross_entropy = 0
+    # For each triplet 123, calculate the truth values of each pair 12, 23, 31
+    truth_values = calculate_truth_values(objects[i][0], objects[i][1],
+                                            objects[i][2])
+
+    for j in range(3):
+      # For each triplet 123, calculate softmax of each pair 12, 23, 31
+      vec1 = training_set[i][j]
+      vec2 = training_set[i][(j+1)%3]
+      vec3 = training_set[i][(j+2)%3]
+
+      softmax = calculate_softmax(weights[vec1], weights[vec2], weights[vec3])
+      cross_entropy -= truth_values[j]*np.log(softmax)
+    loss_values[i] = cross_entropy
+
+  return loss_values
+
+def convert_to_one_hot(triplets_indices, num_objects):
+    """
+    Convert array of arrays of triplets indices to one-hot encoded vectors.
+
+    Args:
+    triplets_indices: List of lists containing triplets of indices.
+    num_objects: Total number of unique objects.
+
+    Returns:
+    one_hot_triplets: List of lists containing one-hot encoded vectors.
+    """
+    one_hot_triplets = []
+    for triplet in triplets_indices:
+        one_hot_triplet = []
+        for index in triplet:
+            one_hot_vector = np.zeros(num_objects)
+            one_hot_vector[index] = 1
+            one_hot_triplet.append(one_hot_vector)
+        one_hot_triplets.append(one_hot_triplet)
+    return one_hot_triplets
+
+def random_one_hot_matrix(num):
+    matrix = np.zeros((num, 3))  # Initialize matrix with zeros
+    for i in range(num):
+        random_index = np.random.randint(0, 3)  # Choose a random index (0, 1, or 2)
+        matrix[i, random_index] = 1  # Set the corresponding element to 1
+    return matrix
+
+def convert_to_truth_values(triplets_indices, matrix):
+  """
+  Create an array of arrays of three truth values
+  """
+
+  truth_values = []
+
+  for triplet in triplets_indices:
+    sim_ij = matrix[triplet[0]][triplet[1]]
+    sim_jk = matrix[triplet[1]][triplet[2]]
+    sim_ki = matrix[triplet[2]][triplet[0]]
+
+    max_sim = max(sim_ij, sim_jk, sim_ki)
+
+    if max_sim == sim_ij:
+      truth_values.append([1,0,0])
+    elif max_sim == sim_jk:
+      truth_values.append([0,1,0])
+    elif max_sim == sim_ki:
+      truth_values.append([0,0,1])
+
+  return truth_values
+
+def test_model_accuracy(object_matrix, test_indices, y_true):
+  """
+  Test the accuracy of the given matrix.
+  """
+  x = []
+  for triplet in test_indices:
+    vi = object_matrix[triplet[0]]
+    vj = object_matrix[triplet[1]]
+    vk = object_matrix[triplet[2]]
+    x.append(calculate_truth_values(vi, vj, vk))
+
+  total_elements = len(x)
+  matching_elements = sum(x[i] == y_true[i] for i in range(total_elements))  # Count matching elements
+
+  total_elements = len(x)  # Total number of elements
+
+  # Calculate percentage of matching elements
+  percentage_matching = (matching_elements / total_elements) * 100
+
+  return percentage_matching
+
+# Preparation
+
+# Load RDM48_triplet.mat to a matrix to m with dimension
+matlab_sim_matrix = loadmat('RDM48_triplet.mat')
+m = matlab_sim_matrix['RDM48_triplet']
+num_objects = np.shape(m)[0]
+
+# Generate random triplet indeices
+triplets_indices = generate_triplets_indices(num_objects)
+print(len(triplets_indices))
+
+# Split to test and train
+train_indices, test_indices = train_test_split(triplets_indices, test_size=0.1, random_state=42)
+
+# Convert indices to actual triplets
+train_triplets = convert_to_one_hot(train_indices, num_objects)
+test_triplets = convert_to_one_hot(test_indices, num_objects)
+
+y_true_train = convert_to_truth_values(train_indices, m)
+y_true_test = convert_to_truth_values(test_indices, m)
+
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+
+if not tf.__version__.startswith('1.'):
+    tf = tf.compat.v1
+tf.disable_v2_behavior()
+
+# Constants
+num_objects = 48 # Number of unique objects
+latent_dim = 49  # Dimensionality of the latent space
+learning_rate = 0.001
+lambda_reg = 0.008  # Regularization parameter
+batch_size = 100
+num_steps = 10
+
+# Placeholder for input data (triplets)
+X = tf.placeholder(tf.float32, shape=[None, 3, num_objects])
+
+
+# Weight matrix
+weights = tf.Variable(tf.random_uniform([num_objects, latent_dim], 0, 1))
+
+# Model
+def forward_pass(x):
+    # Embed each object in the triplet to the latent space
+    x_reshaped = tf.reshape(x, [-1, num_objects])
+    embedded_triplet = tf.matmul(x_reshaped, weights)  # Shape: [batch_size, 3, latent_dim]
+    embedded_triplet = tf.reshape(embedded_triplet, [-1, 3, latent_dim])  # Reshape to (15566, 3, 49)
+
+    return embedded_triplet
+
+def custom_loss(embedded_triplet, Y_true):
+    # Dot products
+    dot_ij = tf.reduce_sum(embedded_triplet[:, 0, :] * embedded_triplet[:, 1, :], axis=1)
+    dot_jk = tf.reduce_sum(embedded_triplet[:, 1, :] * embedded_triplet[:, 2, :], axis=1)
+    dot_ki = tf.reduce_sum(embedded_triplet[:, 2, :] * embedded_triplet[:, 0, :], axis=1)
+
+    # Exponentials of the dot products
+    exp_dot_ij = tf.exp(dot_ij)
+    exp_dot_jk = tf.exp(dot_jk)
+    exp_dot_ki = tf.exp(dot_ki)
+
+    # Softmax-like normalization for each pair
+    normalization = exp_dot_ij + exp_dot_jk + exp_dot_ki
+    prob_i = exp_dot_ij / normalization
+    prob_j = exp_dot_jk / normalization
+    prob_k = exp_dot_ki / normalization
+
+    # Assemble the probabilities into a tensor similar to Y_true structure
+    probs = tf.stack([prob_i, prob_j, prob_k], axis=1)
+
+    # Cross-entropy loss
+    loss = -tf.reduce_sum(Y_true * tf.log(probs + 1e-9))  # Adding epsilon to avoid log(0)
+
+    return loss
+
+
+# Forward pass
+embedded_triplet = forward_pass(X)
+
+# Placeholder for true labels
+Y_true = tf.placeholder(tf.float32, shape=[None, 3])
+
+# Loss
+loss = custom_loss(embedded_triplet, Y_true) + lambda_reg * tf.reduce_sum(tf.abs(weights))
+
+# Optimizer
+optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(loss)
+
+# Initialize variables
+init = tf.global_variables_initializer()
+
+# Example for running the session
+with tf.Session() as sess:
+    sess.run(init)
+
+    # Example loop for training
+    for step in range(num_steps):
+        # Dummy data: real data loading logic needed
+        y_t = random_one_hot_matrix(15566)
+
+        _, loss_val = sess.run([optimizer, loss], feed_dict={X: train_triplets, Y_true: y_true_train})
+
+        if step == (num_steps - 1):
+          print("Step: {}, Loss: {}".format(step, loss_val))
+
+    # Compute loss on test data
+    _, test_loss_val = sess.run([optimizer, loss], feed_dict={X: test_triplets, Y_true: y_true_test})
+
+    print("Test Loss:", test_loss_val)
+
+    trained_weights = sess.run(weights)
+
+    print("Trained Weights Matrix:", trained_weights)
+
+def results(trained_weights):
+  # Divide trained weights into perceptual and conceptual dimensions
+  perceptual_m = trained_weights[:, perceptual_i]
+  conceptual_m = trained_weights[:, conceptual_i]
+
+  # Test the accuracy of each matrix
+  actual_accuracy = test_model_accuracy(trained_weights, test_indices, y_true_test)
+  perceptual_accuracy = test_model_accuracy(perceptual_m, test_indices, y_true_test)
+  conceptual_accuracy = test_model_accuracy(conceptual_m, test_indices, y_true_test)
+
+  return actual_accuracy, perceptual_accuracy, conceptual_accuracy
+
+num_steps_list = [n * 100 for n in range(1, 21)]  # Starts from 100 to 1000 in steps of 100
+actual = []
+perceptual = []
+conceptual = []
+
+# Initialize the session and variables once
+with tf.Session() as sess:
+    sess.run(init)
+
+    prev_num_steps = 0  # Track the previous number of steps
+    for num_steps in num_steps_list:
+        additional_steps = num_steps - prev_num_steps  # Calculate additional steps needed
+
+        # Loop for the additional training steps
+        for step in range(additional_steps):
+            _, loss_val = sess.run([optimizer, loss], feed_dict={X: train_triplets, Y_true: y_true_train})
+
+        # At the end of additional steps, print the loss
+        print("Total Steps: {}, Loss: {}".format(num_steps, loss_val))
+
+        # Compute loss on test data once after additional training steps
+        test_loss_val = sess.run(loss, feed_dict={X: test_triplets, Y_true: y_true_test})
+        print("Test Loss after {} steps: {}".format(num_steps, test_loss_val))
+
+        trained_weights = sess.run(weights)
+
+        actual_accuracy, perceptual_accuracy, conceptual_accuracy = results(trained_weights)
+        actual.append(actual_accuracy)
+        perceptual.append(perceptual_accuracy)
+        conceptual.append(conceptual_accuracy)
+
+        prev_num_steps = num_steps  # Update the previous number of steps for the next iteration
+
+# Plot your results or perform further analysis here
