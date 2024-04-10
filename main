@@ -480,4 +480,47 @@ with tf.Session() as sess:
 
         prev_num_steps = num_steps  # Update the previous number of steps for the next iteration
 
-# Plot your results or perform further analysis here
+
+# Create line plots
+plt.figure(figsize=(10, 6))
+plt.plot(num_steps_list, actual, label='Actual', marker='o')
+plt.plot(num_steps_list, perceptual, label='Perceptual', marker='o')
+plt.plot(num_steps_list, conceptual, label='Conceptual', marker='o')
+plt.title('Accuracy vs. Number of Training Steps')
+plt.xlabel('Number of Training Steps')
+plt.ylabel('Accuracy (%)')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Produce DataFrame
+data = pd.DataFrame({
+    'Accuracy': perceptual + conceptual,
+    'Dimension': ['Perceptual'] * len(perceptual) + ['Conceptual'] * len(conceptual)
+})
+
+# Visualize the data
+plt.figure(figsize=(8, 6))
+sns.boxplot(x='Dimension', y='Accuracy', data=data)
+plt.title('Accuracy Comparison between Perceptual and Conceptual Dimensions')
+plt.xlabel('Dimension')
+plt.ylabel('Accuracy')
+plt.show()
+
+# Perform ANOVA
+f_statistic, p_value = f_oneway(perceptual, conceptual)
+print("ANOVA results:")
+print("F-statistic:", f_statistic)
+print("p-value:", p_value)
+
+# Perform post-hoc Tukey's HSD test if ANOVA is significant
+if p_value < 0.05:
+    print("\nPost-hoc Tukey's HSD test:")
+    tukey_results = pairwise_tukeyhsd(data['Accuracy'], data['Dimension'])
+    print(tukey_results)
+
+    # Visualize the post-hoc test results
+    plt.figure(figsize=(8, 6))
+    tukey_results.plot_simultaneous(comparison_name='Perceptual', xlabel='Accuracy Difference')
+    plt.title("Tukey's HSD Test for Accuracy Difference")
+    plt.show()
